@@ -32,6 +32,10 @@ def _build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--port", type=_port, default=8000)
     serve_parser.add_argument("--reload", action="store_true")
     serve_parser.add_argument(
+        "--state-dir", type=Path, metavar="DIRECTORY",
+        help="Private directory for automatically saved uploads and analysis results.",
+    )
+    serve_parser.add_argument(
         "--allowed-host",
         action="append",
         default=[],
@@ -137,6 +141,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     # The subparsers accept only "inspect" and "serve"; no command also serves.
+    state_dir = getattr(args, "state_dir", None)
+    if state_dir is not None:
+        os.environ["SURVSTUDIO_STATE_DIR"] = str(state_dir.expanduser().absolute())
     return _run_serve(
         host=getattr(args, "host", "127.0.0.1"),
         port=getattr(args, "port", 8000),

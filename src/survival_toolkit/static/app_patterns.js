@@ -105,6 +105,60 @@ function refreshPatternControls({ useDefaults = true } = {}) {
     patternRefs.Group.value = molecular ? "stage" : tcga ? "stage_group" : "";
   }
 }
+async function renderPredictorPatternResult(payload, { isCurrent = () => true } = {}) {
+  const plots = { comparison: patternRefs.ComparisonPlot, risk: patternRefs.RiskPlot, curve: patternRefs.CurvePlot };
+  predictorPatternState.payload = payload;
+  const a = payload.analysis;
+  patternRefs.Results.classList.remove("hidden");
+  patternRefs.Status.textContent = `${a.training_patients} training patients; ${a.test_patients} shared test patients (${a.test_events} events). ${a.excluded_missing_outcome_rows} rows excluded for missing outcomes. ${a.comparison.n_bootstrap_valid}/${a.comparison.n_bootstrap_requested} paired bootstrap draws defined.`;
+  const audit = a.input_audit?.outcome_proxy;
+  if (audit) {
+    const label = audit.status === "reviewed_by_user" ? "Predictor timing and source reviewed; findings retained."
+      : audit.status === "no_pattern_detected" ? "No near-exact outcome pattern detected in training data."
+      : "Outcome-pattern screening has limited coverage.";
+    patternRefs.Status.textContent += ` ${label} This does not certify that every predictor is safe.`;
+  }
+  const interval = a.comparison.delta_ci;
+  const range = interval[0] === null ? "not estimable" : `${interval[0].toFixed(3)} to ${interval[1].toFixed(3)}`;
+  patternRefs.Interpretation.textContent = `Change in C-index: ${a.comparison.delta_c.toFixed(3)} (95% paired interval: ${range}). ${a.interpretation} The interval describes test-patient uncertainty for these fitted models.`;
+  await Plotly.newPlot(plots.comparison, payload.comparison_figure.data, plotLayoutConfig(payload.comparison_figure.layout, "predictor_comparison"), plotConfig("predictor_comparison"));
+  if (!isCurrent()) return;
+  const display = a.risk_display;
+  if (payload.risk_group_figure) {
+    const layout = { ...payload.risk_group_figure.layout, title: { ...payload.risk_group_figure.layout.title, text: "Observed survival in predicted risk groups" } };
+    await Plotly.newPlot(plots.risk, payload.risk_group_figure.data, plotLayoutConfig(layout, "predicted_risk_groups"), plotConfig("predicted_risk_groups"));
+    if (!isCurrent()) return;
+    patternRefs.RiskNote.textContent = "Groups use the training risk median. Curves show observed survival in held-out patients; C-index assesses prediction. The cutoff is not a clinical decision threshold.";
+  } else {
+    patternRefs.RiskPlot.replaceChildren();
+    patternRefs.RiskNote.textContent = display?.curve_error || "Risk-group curves are unavailable in this saved result.";
+  }
+  patternRefs.RiskTable.replaceChildren();
+  if (display) {
+    const table = document.createElement("table");
+    const head = document.createElement("thead"); const header = document.createElement("tr");
+    ["Source row (0-based)", "Relative risk score", "Rank in test patients", "Predicted group"].forEach((label) => { const cell = document.createElement("th"); cell.textContent = label; header.appendChild(cell); });
+    head.appendChild(header); table.appendChild(head); const body = document.createElement("tbody");
+    display.rows.slice(0, 10).forEach((row) => {
+      const tr = document.createElement("tr");
+      [row.source_row, row.risk_score.toFixed(3), row.test_risk_rank, row.predicted_risk_group].forEach((value) => { const td = document.createElement("td"); td.textContent = value; tr.appendChild(td); });
+      body.appendChild(tr);
+    });
+    table.appendChild(body); patternRefs.RiskTable.appendChild(table);
+    const note = document.createElement("p"); note.textContent = `Showing the ten highest scores. Save patient risk scores for all ${display.rows.length} held-out patients; source rows trace to the loaded table.`; patternRefs.RiskTable.appendChild(note);
+  }
+  if (payload.pattern_figure) {
+    await Plotly.newPlot(plots.curve, payload.pattern_figure.data, plotLayoutConfig(payload.pattern_figure.layout, "predictor_pattern"), plotConfig("predictor_pattern"));
+    if (!isCurrent()) return;
+    patternRefs.CurveNote.textContent = "The fitted model is fixed. Curves use the same training background; gaps mark values without enough observed training support in that group. They do not confirm a biological interaction.";
+  } else {
+    patternRefs.CurvePlot.replaceChildren();
+    patternRefs.CurveNote.textContent = `Curve unavailable: ${a.pattern_error}. The predictor-set comparison above was completed.`;
+  }
+  if (!isCurrent()) return;
+  syncPatternCurrency();
+}
+
 async function runPredictorPatterns() {
   const config = patternConfig();
   if (!config.clinical_features.length || !config.added_features.length) throw new Error("Choose clinical and added predictors.");
@@ -126,56 +180,8 @@ async function runPredictorPatterns() {
   try {
     const payload = await fetchJSON("/api/predictor-patterns", { method: "POST", body: JSON.stringify({ ...config, ...outcomeProxyReviewFields("patterns") }), signal: controller.signal });
     if (!isCurrent()) return;
-    predictorPatternState.payload = payload;
-    const a = payload.analysis;
-    patternRefs.Results.classList.remove("hidden");
-    patternRefs.Status.textContent = `${a.training_patients} training patients; ${a.test_patients} shared test patients (${a.test_events} events). ${a.excluded_missing_outcome_rows} rows excluded for missing outcomes. ${a.comparison.n_bootstrap_valid}/${a.comparison.n_bootstrap_requested} paired bootstrap draws defined.`;
-    const audit = a.input_audit?.outcome_proxy;
-    if (audit) {
-      const label = audit.status === "reviewed_by_user" ? "Predictor timing and source reviewed; findings retained."
-        : audit.status === "no_pattern_detected" ? "No near-exact outcome pattern detected in training data."
-        : "Outcome-pattern screening has limited coverage.";
-      patternRefs.Status.textContent += ` ${label} This does not certify that every predictor is safe.`;
-    }
-    const interval = a.comparison.delta_ci;
-    const range = interval[0] === null ? "not estimable" : `${interval[0].toFixed(3)} to ${interval[1].toFixed(3)}`;
-    patternRefs.Interpretation.textContent = `Change in C-index: ${a.comparison.delta_c.toFixed(3)} (95% paired interval: ${range}). ${a.interpretation} The interval describes test-patient uncertainty for these fitted models.`;
-    await Plotly.newPlot(plots.comparison, payload.comparison_figure.data, plotLayoutConfig(payload.comparison_figure.layout, "predictor_comparison"), plotConfig("predictor_comparison"));
-    if (!isCurrent()) return;
-    const display = a.risk_display;
-    if (payload.risk_group_figure) {
-      const layout = { ...payload.risk_group_figure.layout, title: { ...payload.risk_group_figure.layout.title, text: "Observed survival in predicted risk groups" } };
-      await Plotly.newPlot(plots.risk, payload.risk_group_figure.data, plotLayoutConfig(layout, "predicted_risk_groups"), plotConfig("predicted_risk_groups"));
-      if (!isCurrent()) return;
-      patternRefs.RiskNote.textContent = "Groups use the training risk median. Curves show observed survival in held-out patients; C-index assesses prediction. The cutoff is not a clinical decision threshold.";
-    } else {
-      patternRefs.RiskPlot.replaceChildren();
-      patternRefs.RiskNote.textContent = display?.curve_error || "Risk-group curves are unavailable in this saved result.";
-    }
-    patternRefs.RiskTable.replaceChildren();
-    if (display) {
-      const table = document.createElement("table");
-      const head = document.createElement("thead"); const header = document.createElement("tr");
-      ["Source row (0-based)", "Relative risk score", "Rank in test patients", "Predicted group"].forEach((label) => { const cell = document.createElement("th"); cell.textContent = label; header.appendChild(cell); });
-      head.appendChild(header); table.appendChild(head); const body = document.createElement("tbody");
-      display.rows.slice(0, 10).forEach((row) => {
-        const tr = document.createElement("tr");
-        [row.source_row, row.risk_score.toFixed(3), row.test_risk_rank, row.predicted_risk_group].forEach((value) => { const td = document.createElement("td"); td.textContent = value; tr.appendChild(td); });
-        body.appendChild(tr);
-      });
-      table.appendChild(body); patternRefs.RiskTable.appendChild(table);
-      const note = document.createElement("p"); note.textContent = `Showing the ten highest scores. Save patient risk scores for all ${display.rows.length} held-out patients; source rows trace to the loaded table.`; patternRefs.RiskTable.appendChild(note);
-    }
-    if (payload.pattern_figure) {
-      await Plotly.newPlot(plots.curve, payload.pattern_figure.data, plotLayoutConfig(payload.pattern_figure.layout, "predictor_pattern"), plotConfig("predictor_pattern"));
-      if (!isCurrent()) return;
-      patternRefs.CurveNote.textContent = "The fitted model is fixed. Curves use the same training background; gaps mark values without enough observed training support in that group. They do not confirm a biological interaction.";
-    } else {
-      patternRefs.CurvePlot.replaceChildren();
-      patternRefs.CurveNote.textContent = `Curve unavailable: ${a.pattern_error}. The predictor-set comparison above was completed.`;
-    }
-    if (!isCurrent()) return;
-    syncPatternCurrency();
+    await renderPredictorPatternResult(payload, { isCurrent });
+    queueSavedWorkspace();
   } catch (error) {
     if (sequence === predictorPatternState.sequence && !isSupersededRequestError(error)) {
       patternRefs.Status.textContent = `Comparison not completed: ${error.message}`;

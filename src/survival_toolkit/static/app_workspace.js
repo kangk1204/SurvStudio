@@ -733,6 +733,7 @@ function scheduleResultCurrencySync(delay = 60) {
 
 function queueHistorySync() {
   syncStaleSingleResultArtifacts();
+  queueSavedWorkspace();
   if (runtime.historySyncPaused || !state.dataset || !window.history?.replaceState) return;
   if (runtime.historySyncTimer) window.clearTimeout(runtime.historySyncTimer);
   runtime.historySyncTimer = window.setTimeout(() => {
@@ -954,10 +955,10 @@ async function restoreHistoryState(historyState) {
   }
 }
 
-// Leaving the page in this tab (a reload, a typed address, a link) discards every result held in memory, so
-// while there are results the browser asks first. Links such as "Check its design" open a new tab instead.
+// Completed results are saved on the server. Warn only while a screen save is pending or unavailable.
 function confirmLeavingWithResults(event) {
   if (!state.dataset || !refs.workspace?.isConnected || !hasCompletedResults()) return;
+  if (savedWorkState.enabled && !savedWorkState.pending && !savedWorkState.error) return;
   event.preventDefault();
   // Older browsers ask only when returnValue is set.
   event.returnValue = "";

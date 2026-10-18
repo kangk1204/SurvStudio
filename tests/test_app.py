@@ -48,6 +48,7 @@ _APP_JS_PARTS = (
     "app_models.js",
     "app_markers.js",
     "app_patterns.js",
+    "app_saved_work.js",
     "app.js",
 )
 
@@ -4579,7 +4580,7 @@ def test_frontend_ml_compare_forwards_visible_hyperparameters() -> None:
     app_js = _AppJsSource().read_text(encoding="utf-8")
 
     run_compare_start = app_js.index("async function runCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = \"single_family_compare\" } = {})")
-    run_compare_end = app_js.index("state.ml = payload;", run_compare_start)
+    run_compare_end = app_js.index("await renderMlComparisonResult(payload);", run_compare_start)
     run_compare_body = app_js[run_compare_start:run_compare_end]
 
     assert '...mlModelRequestFields("compare"),' in run_compare_body
@@ -7287,7 +7288,9 @@ def test_marker_frontend_runs_the_evaluation_and_validates_the_locked_model() ->
         assert f"{field}:" in fields
     validation = text.split("async function runMarkerValidation() {", 1)[1].split("\n}\n", 1)[0]
     assert "const fields = markerValidationRequestFields();" in validation
-    assert "body:JSON.stringify({dataset_id:external.dataset_id,recipe,...fields})" in "".join(validation.split())
+    # Recovery groups validation under the development workspace; explicit
+    # deletion also follows the separate external-input relationship.
+    assert "body:JSON.stringify({dataset_id:external.dataset_id,development_dataset_id:sourceDatasetId,recipe,...fields})" in "".join(validation.split())
     # Node frontend regressions verify the actual request's defaults, custom values and invalid-input rejection.
     assert 'withLoading(refs.runMarkersButton, runMarkerEvaluation, "markers")' in text
     assert 'if (scope === "markers") return [refs.runMarkersButton, refs.selectAllMarkersButton, refs.clearMarkersButton, refs.runMarkerValidationButton];' in text

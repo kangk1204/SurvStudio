@@ -547,13 +547,13 @@ function clearAnalysisOutputs() {
 }
 
 function updateAfterDataset(payload, { scrollToTop = false } = {}) {
+  if (state.dataset && state.dataset.dataset_id !== payload.dataset_id && !savedWorkState.restoring) void saveCurrentWorkspace();
   // A different dataset makes any pending derive/signature response obsolete.
   invalidateRequestTokens(["derive", "signature"]);
+  if (savedWorkState.modeKnown && !savedWorkState.enabled && state.dataset?.dataset_id !== payload.dataset_id) deleteMarkerMatrixOnServer(state.markerMatrix?.matrix_id);
   state.dataset = payload;
-  // A marker matrix belongs to the patients of the dataset it was attached to; derived-column snapshots keep it,
-  // and another dataset frees it on the server.
-  deleteMarkerMatrixOnServer(state.markerMatrix?.matrix_id);
-  state.markerMatrix = null;
+  // Switching cohorts clears the selection, not the saved matrix. Only explicit Remove deletes it.
+  state.markerMatrix = payload.attached_marker_matrix || null;
   // Results, banners, plots, and export buttons of the previous dataset.
   clearAnalysisOutputs();
   refs.deriveSummary.innerHTML = "";
@@ -637,8 +637,10 @@ function uploadFeedbackMessages(payload, { previousDatasetName = "", clearedResu
   const summary = `${datasetName} loaded (${rowCount} rows, ${columnCount} columns).${uploadEncodingNote(payload)}`;
   if (previousDatasetName) {
     return {
-      banner: `${summary} Replaced ${previousDatasetName}${clearedResults ? " and cleared the previous analysis results" : ""}. Confirm the new outcome fields before running again.`,
-      toast: `Loaded ${datasetName}.${clearedResults ? " Previous results were cleared." : " Previous dataset was replaced."}`,
+      banner: savedWorkState.enabled
+        ? `${summary} Previous work remains in Saved work. Confirm the new outcome fields before running again.`
+        : `${summary} Replaced ${previousDatasetName}${clearedResults ? " and cleared the previous analysis results" : ""}. Confirm the new outcome fields before running again.`,
+      toast: `Loaded ${datasetName}.${savedWorkState.enabled ? " Previous work remains saved." : (clearedResults ? " Previous results were cleared." : " Previous dataset was replaced.")}`,
     };
   }
   return {
@@ -943,6 +945,29 @@ function updateMlModelControlVisibility() {
   }
 }
 
+async function renderKaplanMeierResult(payload) {
+  state.km = payload;
+  queueSavedWorkspace();
+  renderAnalysisConsistencyBanner();
+  const kmFigure = payload?.figure || { data: [], layout: {} };
+  const kmAnalysis = payload?.analysis || {};
+  const kmRiskTable = kmAnalysis.risk_table || {};
+  const kmSummary = kmAnalysis.scientific_summary || null;
+  const cohort = kmAnalysis.cohort || {};
+  const test = kmAnalysis.test || null;
+  resetPlotElement(refs.kmPlot);
+  await Plotly.newPlot(refs.kmPlot, kmFigure.data || [], responsivePlotLayout(refs.kmPlot, kmFigure.layout || {}), plotConfig("km_curve"));
+  markPlotResult(refs.kmPlot, payload);
+  stabilizePlotShellHeight(refs.kmPlot);
+  renderTable(refs.kmSummaryShell, kmAnalysis.summary_table);
+  renderTable(refs.kmRiskShell, kmRiskTable.rows, kmRiskTable.columns);
+  flashPresetTargets([refs.kmRiskShell]);
+  renderTable(refs.kmPairwiseShell, kmAnalysis.pairwise_table);
+  renderInsightBoard(refs.kmInsightBoard, kmSummary, "Run KM to generate an interpretation panel.");
+  refs.kmMetaBanner.textContent = `N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${(payload.request_config?.time_unit_label || DEFAULT_TIME_UNIT_LABEL)}${test ? `, ${test.test} ${pValuePhrase(test.p_value)}` : ""}`;
+  syncDownloadButtonAvailability();
+}
+
 async function runKaplanMeier() {
   // Inputs are checked before the previous request is cancelled, so an invalid click leaves it running.
   const base = currentBaseConfig();
@@ -971,25 +996,7 @@ async function runKaplanMeier() {
   }
   if (!requestTokenMatches("km", requestToken) || state.dataset?.dataset_id !== datasetId) return;
   loading.finish();
-  state.km = payload;
-  renderAnalysisConsistencyBanner();
-  const kmFigure = payload?.figure || { data: [], layout: {} };
-  const kmAnalysis = payload?.analysis || {};
-  const kmRiskTable = kmAnalysis.risk_table || {};
-  const kmSummary = kmAnalysis.scientific_summary || null;
-  const cohort = kmAnalysis.cohort || {};
-  const test = kmAnalysis.test || null;
-  resetPlotElement(refs.kmPlot);
-  await Plotly.newPlot(refs.kmPlot, kmFigure.data || [], responsivePlotLayout(refs.kmPlot, kmFigure.layout || {}), plotConfig("km_curve"));
-  markPlotResult(refs.kmPlot, payload);
-  stabilizePlotShellHeight(refs.kmPlot);
-  renderTable(refs.kmSummaryShell, kmAnalysis.summary_table);
-  renderTable(refs.kmRiskShell, kmRiskTable.rows, kmRiskTable.columns);
-  flashPresetTargets([refs.kmRiskShell]);
-  renderTable(refs.kmPairwiseShell, kmAnalysis.pairwise_table);
-  renderInsightBoard(refs.kmInsightBoard, kmSummary, "Run KM to generate an interpretation panel.");
-  refs.kmMetaBanner.textContent = `N=${formatValue(cohort.n)}, events=${formatValue(cohort.events)}, censored=${formatValue(cohort.censored)}, median follow-up=${formatValue(cohort.median_follow_up)} ${base.time_unit_label}${test ? `, ${test.test} ${pValuePhrase(test.p_value)}` : ""}`;
-  syncDownloadButtonAvailability();
+  await renderKaplanMeierResult(payload);
   revealCompletedResultIfCurrent("km", {
     successMessage: `Kaplan-Meier analysis complete. Risk table shows ${formatValue(Math.max((kmRiskTable.columns || []).length - 1, 0))} time points.`,
     backgroundMessage: "Kaplan-Meier finished in the background. Switch back when you are ready to review the updated curve.",
@@ -1104,27 +1111,9 @@ async function runSignatureSearch() {
   });
 }
 
-async function runCox() {
-  const base = currentBaseConfig();
-  const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
-  if (!covariates.length) { showToast("Select at least one covariate for the Cox model.", "error"); return; }
-  const requestToken = beginRequestToken("cox");
-  const datasetId = base.dataset_id;
-  const loading = beginShellLoading([refs.coxResultsShell]);
-  let payload;
-  try {
-    payload = await fetchJSON("/api/cox", {
-      signal: requestSignal("cox"),
-      method: "POST",
-      body: JSON.stringify({ ...base, covariates, categorical_covariates: categoricalCovariates, strata_columns: strataColumns }),
-    });
-  } catch (error) {
-    if (requestTokenMatches("cox", requestToken)) loading.restore();
-    throw error;
-  }
-  if (!requestTokenMatches("cox", requestToken) || state.dataset?.dataset_id !== datasetId) return;
-  loading.finish();
+async function renderCoxResult(payload) {
   state.cox = payload;
+  queueSavedWorkspace();
   renderAnalysisConsistencyBanner();
   const coxFigure = payload?.figure || { data: [], layout: {} };
   const coxAnalysis = payload?.analysis || {};
@@ -1167,10 +1156,50 @@ async function runCox() {
   const coxStrataCore = coxStrataMeta.length ? `, ${coxStrataMeta.join(", ")}` : "";
   refs.coxMetaBanner.textContent = `N=${formatValue(stats.n)}, events=${formatValue(stats.events)}, parameters=${formatValue(stats.parameters)}, EPV=${formatValue(stats.events_per_parameter)}, ${coxMetricCore}${coxMetricCi}${coxStrataCore}, AIC=${formatValue(stats.aic, { scientificLarge: false })}`;
   syncDownloadButtonAvailability();
+}
+
+async function runCox() {
+  const base = currentBaseConfig();
+  const { covariates, categoricalCovariates, strataColumns } = currentCoxSelections();
+  if (!covariates.length) { showToast("Select at least one covariate for the Cox model.", "error"); return; }
+  const requestToken = beginRequestToken("cox");
+  const datasetId = base.dataset_id;
+  const loading = beginShellLoading([refs.coxResultsShell]);
+  let payload;
+  try {
+    payload = await fetchJSON("/api/cox", {
+      signal: requestSignal("cox"),
+      method: "POST",
+      body: JSON.stringify({ ...base, covariates, categorical_covariates: categoricalCovariates, strata_columns: strataColumns }),
+    });
+  } catch (error) {
+    if (requestTokenMatches("cox", requestToken)) loading.restore();
+    throw error;
+  }
+  if (!requestTokenMatches("cox", requestToken) || state.dataset?.dataset_id !== datasetId) return;
+  loading.finish();
+  await renderCoxResult(payload);
   revealCompletedResultIfCurrent("cox", {
     successMessage: "Cox PH model fitted.",
     backgroundMessage: "Cox PH finished in the background. Switch back when you are ready to review the updated model.",
   });
+}
+
+async function renderCohortResult(payload) {
+  state.cohort = payload;
+  queueSavedWorkspace();
+  renderAnalysisConsistencyBanner();
+  // Group-level columns are data labels ("Test positive", "pT1a"): shown as they are, never as p-values.
+  renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns, { pValueColumns: [], rawHeaders: true });
+  const tableNotes = cohortTableAnalysisNotes(payload);
+  if (tableNotes.length && payload.analysis.rows?.length) {
+    const noteEl = document.createElement("p");
+    noteEl.className = "comparison-table-note";
+    noteEl.textContent = tableNotes.join(" ");
+    refs.cohortTableShell.prepend(noteEl);
+  }
+  renderSharedFeatureSummary();
+  syncDownloadButtonAvailability();
 }
 
 async function runCohortTable() {
@@ -1198,19 +1227,7 @@ async function runCohortTable() {
   }
   if (!requestTokenMatches("tables", requestToken) || state.dataset?.dataset_id !== datasetId) return;
   loading.finish();
-  state.cohort = payload;
-  renderAnalysisConsistencyBanner();
-  // Group-level columns are data labels ("Test positive", "pT1a"): shown as they are, never as p-values.
-  renderTable(refs.cohortTableShell, payload.analysis.rows, payload.analysis.columns, { pValueColumns: [], rawHeaders: true });
-  const tableNotes = cohortTableAnalysisNotes(payload);
-  if (tableNotes.length && payload.analysis.rows?.length) {
-    const noteEl = document.createElement("p");
-    noteEl.className = "comparison-table-note";
-    noteEl.textContent = tableNotes.join(" ");
-    refs.cohortTableShell.prepend(noteEl);
-  }
-  renderSharedFeatureSummary();
-  syncDownloadButtonAvailability();
+  await renderCohortResult(payload);
   revealCompletedResultIfCurrent("tables", {
     successMessage: "Cohort table built.",
     backgroundMessage: "Cohort table finished in the background. Switch back when you are ready to review the updated table.",

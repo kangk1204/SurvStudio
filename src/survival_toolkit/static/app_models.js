@@ -67,58 +67,12 @@ function outcomeProxyReviewFields(scope = "models") {
   return { outcome_proxy_review: reason };
 }
 
-async function runMlModel() {
-  if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {
-    throw new Error("Run Analysis uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
-  }
-  const base = currentBaseConfig();
-  const { features, categoricalFeatures } = currentSharedModelSelections("ml");
-  if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
-  validateMlControls();
-  const requestToken = beginRequestToken("ml");
-  const datasetId = base.dataset_id;
-  const selectedModelType = refs.mlModelType.value;
+async function renderMlModelResult(payload, { elapsedSeconds = "saved" } = {}) {
+  const selectedModelType = payload.request_config?.model_type || refs.mlModelType.value;
+  const computeShap = Boolean(payload.request_config?.compute_shap);
   const modelLabel = mlModelLabel(selectedModelType);
-  const computeShap = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked;
-  const shapSafeMode = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked && Boolean(refs.mlShapSafeMode?.checked);
-  const startedAt = performance.now();
-  const previousBannerText = refs.mlMetaBanner.textContent;
-  const loading = beginShellLoading([refs.mlImportancePlot]);
-  refs.mlMetaBanner.textContent = mlPendingBannerText({
-    modelType: selectedModelType,
-    nEstimators: mlSetting("n_estimators", refs.mlNEstimators),
-    rowCount: Number(state.dataset?.n_rows),
-    computeShap,
-  });
-
-  let payload;
-  try {
-    payload = await fetchJSON("/api/ml-model", {
-      signal: requestSignal("ml"),
-      method: "POST",
-      body: JSON.stringify({
-        dataset_id: base.dataset_id, time_column: base.time_column,
-        event_column: base.event_column, event_positive_value: base.event_positive_value,
-        features, categorical_features: categoricalFeatures,
-        predictor_availability_confirmed: refs.predictorAvailabilityConfirmed?.checked ? true : null,
-        ...outcomeProxyReviewFields(),
-        model_type: selectedModelType,
-        ...mlModelRequestFields(selectedModelType),
-        compute_shap: computeShap,
-        shap_safe_mode: shapSafeMode,
-      }),
-    });
-  } catch (error) {
-    if (requestTokenMatches("ml", requestToken)) {
-      loading.restore();
-      refs.mlMetaBanner.textContent = previousBannerText;
-    }
-    throw error;
-  }
-  if (!requestTokenMatches("ml", requestToken) || state.dataset?.dataset_id !== datasetId) return;
-  loading.finish();
-  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
   state.ml = payload;
+  queueSavedWorkspace();
   runtime.resultPreference.ml = "single";
   setPanelResultMode(refs.mlPanel, "single");
   refs.downloadMlComparisonButton.disabled = true;
@@ -188,11 +142,115 @@ async function runMlModel() {
     );
   }
   renderBenchmarkBoard();
+}
+
+async function runMlModel() {
+  if ((refs.mlEvaluationStrategy?.value || "holdout") === "repeated_cv") {
+    throw new Error("Run Analysis uses deterministic holdout only. Switch Evaluation Mode back to Deterministic Holdout or use Compare All for repeated CV screening.");
+  }
+  const base = currentBaseConfig();
+  const { features, categoricalFeatures } = currentSharedModelSelections("ml");
+  if (!features.length) { showToast("Select at least one ML/DL model feature.", "error"); return; }
+  validateMlControls();
+  const requestToken = beginRequestToken("ml");
+  const datasetId = base.dataset_id;
+  const selectedModelType = refs.mlModelType.value;
+  const modelLabel = mlModelLabel(selectedModelType);
+  const computeShap = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked;
+  const shapSafeMode = mlModelSupportsShap(selectedModelType) && !refs.mlSkipShap?.checked && Boolean(refs.mlShapSafeMode?.checked);
+  const startedAt = performance.now();
+  const previousBannerText = refs.mlMetaBanner.textContent;
+  const loading = beginShellLoading([refs.mlImportancePlot]);
+  refs.mlMetaBanner.textContent = mlPendingBannerText({
+    modelType: selectedModelType,
+    nEstimators: mlSetting("n_estimators", refs.mlNEstimators),
+    rowCount: Number(state.dataset?.n_rows),
+    computeShap,
+  });
+
+  let payload;
+  try {
+    payload = await fetchJSON("/api/ml-model", {
+      signal: requestSignal("ml"),
+      method: "POST",
+      body: JSON.stringify({
+        dataset_id: base.dataset_id, time_column: base.time_column,
+        event_column: base.event_column, event_positive_value: base.event_positive_value,
+        features, categorical_features: categoricalFeatures,
+        predictor_availability_confirmed: refs.predictorAvailabilityConfirmed?.checked ? true : null,
+        ...outcomeProxyReviewFields(),
+        model_type: selectedModelType,
+        ...mlModelRequestFields(selectedModelType),
+        compute_shap: computeShap,
+        shap_safe_mode: shapSafeMode,
+      }),
+    });
+  } catch (error) {
+    if (requestTokenMatches("ml", requestToken)) {
+      loading.restore();
+      refs.mlMetaBanner.textContent = previousBannerText;
+    }
+    throw error;
+  }
+  if (!requestTokenMatches("ml", requestToken) || state.dataset?.dataset_id !== datasetId) return;
+  loading.finish();
+  const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
+  await renderMlModelResult(payload, { elapsedSeconds });
   revealCompletedResultIfCurrent("ml", {
     mode: "single",
     successMessage: `${modelLabel} model trained`,
       backgroundMessage: `${modelLabel} model finished in the background. Open Predictive Models when you are ready to review it.`,
   });
+}
+
+async function renderMlComparisonResult(payload) {
+  state.ml = payload;
+  queueSavedWorkspace();
+  runtime.resultPreference.ml = "compare";
+  runtime.compareCache.ml = payload;
+  setPanelResultMode(refs.mlPanel, "compare");
+
+  if (payload.analysis?.comparison_table) {
+    renderComparisonTable(
+      refs.mlComparisonShell,
+      payload.analysis,
+      ["model", "c_index", "c_index_std", "c_index_interval", "locked_test_c_index", "locked_test_n", "locked_test_error", "evaluation_mode", "n_features", "training_time_ms", "rank"],
+    );
+  } else {
+    refs.mlComparisonShell.innerHTML = '<div class="empty-state">No model returned a comparison row.</div>';
+  }
+  if (payload.analysis?.manuscript_tables?.model_performance_table) {
+    // Manuscript headers are publication-ready ("Training Time, ms"): shown exactly as they are exported.
+    renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
+  }
+  if (payload.figure?.data?.length) {
+    refs.mlComparisonPlot.classList.remove("hidden");
+    resetPlotElement(refs.mlComparisonPlot);
+    await Plotly.newPlot(refs.mlComparisonPlot, payload.figure.data, payload.figure.layout, plotConfig("model_comparison"));
+    markPlotResult(refs.mlComparisonPlot, payload);
+    stabilizePlotShellHeight(refs.mlComparisonPlot);
+  } else {
+    resetPlotElement(refs.mlComparisonPlot);
+    refs.mlComparisonPlot.classList.add("hidden");
+  }
+  renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "Model comparison.");
+  const comparisonRows = payload.analysis?.comparison_table || [];
+  // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
+  const rankOne = comparisonRankOneRow(comparisonRows);
+  const bestRow = rankOne || {};
+  const evaluationMode = payload.analysis?.evaluation_mode || "unknown";
+  const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";
+  const evalLabel = compareEvaluationLabel(payload.analysis, evaluationMode);
+  const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";
+  const mlLead = comparisonRows.length && !rankOne
+    ? (repeatedCvLike ? "No model was CV-selected (no complete cross-validation aggregate)" : "No model was ranked")
+    : `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}`;
+  refs.mlMetaBanner.textContent = `${mlLead}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}`;
+  refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
+  if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
+  if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
+  setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
+  renderBenchmarkBoard();
 }
 
 async function runCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = "single_family_compare" } = {}) {
@@ -249,52 +307,7 @@ async function runCompareModels({ suppressCompletionToast = false, compareGroupI
     if (!requestTokenMatches("ml", requestToken) || state.dataset?.dataset_id !== datasetId) return;
     loading.finish();
     tagComparePayload(payload, compareGroupId || nextCompareRunGroupId("ml-compare"), compareSource);
-    state.ml = payload;
-    runtime.resultPreference.ml = "compare";
-    runtime.compareCache.ml = payload;
-    setPanelResultMode(refs.mlPanel, "compare");
-
-    if (payload.analysis?.comparison_table) {
-      renderComparisonTable(
-        refs.mlComparisonShell,
-        payload.analysis,
-        ["model", "c_index", "c_index_std", "c_index_interval", "locked_test_c_index", "locked_test_n", "locked_test_error", "evaluation_mode", "n_features", "training_time_ms", "rank"],
-      );
-    } else {
-      refs.mlComparisonShell.innerHTML = '<div class="empty-state">No model returned a comparison row.</div>';
-    }
-    if (payload.analysis?.manuscript_tables?.model_performance_table) {
-      // Manuscript headers are publication-ready ("Training Time, ms"): shown exactly as they are exported.
-      renderTable(refs.mlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
-    }
-    if (payload.figure?.data?.length) {
-      refs.mlComparisonPlot.classList.remove("hidden");
-      resetPlotElement(refs.mlComparisonPlot);
-      await Plotly.newPlot(refs.mlComparisonPlot, payload.figure.data, payload.figure.layout, plotConfig("model_comparison"));
-      markPlotResult(refs.mlComparisonPlot, payload);
-      stabilizePlotShellHeight(refs.mlComparisonPlot);
-    } else {
-      resetPlotElement(refs.mlComparisonPlot);
-      refs.mlComparisonPlot.classList.add("hidden");
-    }
-    renderInsightBoard(refs.mlInsightBoard, payload.analysis?.scientific_summary, "Model comparison.");
-    const comparisonRows = payload.analysis?.comparison_table || [];
-    // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
-    const rankOne = comparisonRankOneRow(comparisonRows);
-    const bestRow = rankOne || {};
-    const evaluationMode = payload.analysis?.evaluation_mode || "unknown";
-    const repeatedCvLike = evaluationMode === "repeated_cv" || evaluationMode === "repeated_cv_incomplete";
-    const evalLabel = compareEvaluationLabel(payload.analysis, evaluationMode);
-    const mlMetricLabel = repeatedCvLike ? "Mean C-index" : "C-index";
-    const mlLead = comparisonRows.length && !rankOne
-      ? (repeatedCvLike ? "No model was CV-selected (no complete cross-validation aggregate)" : "No model was ranked")
-      : `Screening top model=${formatValue(bestRow.model)}, ${mlMetricLabel}=${formatValue(bestRow.c_index)}`;
-    refs.mlMetaBanner.textContent = `${mlLead}, eval=${formatValue(evalLabel)}, models=${formatValue(comparisonRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}`;
-    refs.downloadMlComparisonButton.disabled = comparisonRows.length === 0;
-    if (refs.downloadMlComparisonPngButton) refs.downloadMlComparisonPngButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
-    if (refs.downloadMlComparisonSvgButton) refs.downloadMlComparisonSvgButton.disabled = !plotShowsResult(refs.mlComparisonPlot, payload);
-    setMlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
-    renderBenchmarkBoard();
+    await renderMlComparisonResult(payload);
     if (!suppressCompletionToast) {
       revealCompletedResultIfCurrent("ml", {
         mode: "compare",
@@ -412,6 +425,97 @@ async function runUnifiedPredictiveComparison() {
 
 // ── Deep Learning ──────────────────────────────────────────────
 
+async function renderDlModelResult(payload, { elapsedSeconds = "saved" } = {}) {
+  const modelType = payload.request_config?.model_type || refs.dlModelType.value;
+  state.dl = payload;
+  queueSavedWorkspace();
+  runtime.resultPreference.dl = "single";
+  setPanelResultMode(refs.dlPanel, "single");
+  const stats = payload.analysis || {};
+
+  if (payload.figures?.importance) {
+    resetPlotElement(refs.dlImportancePlot);
+    await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, plotLayoutConfig(payload.figures.importance.layout, "dl_importance"), plotConfig("dl_importance"));
+    stabilizePlotShellHeight(refs.dlImportancePlot);
+    setPlotShellState(refs.dlImportancePlot, "plot");
+  } else {
+    const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
+      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit gradient salience.</span></div>'
+      : '<div class="empty-state plot-empty"><span>No feature importance available</span></div>';
+    clearPlotShell(refs.dlImportancePlot, importanceEmpty);
+  }
+  if (payload.figures?.loss) {
+    resetPlotElement(refs.dlLossPlot);
+    await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, plotLayoutConfig(payload.figures.loss.layout, "dl_loss"), plotConfig("dl_loss"));
+    stabilizePlotShellHeight(refs.dlLossPlot);
+    setPlotShellState(refs.dlLossPlot, "plot");
+  } else {
+    const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
+      ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
+      : '<div class="empty-state plot-empty"><span>No loss curve available</span></div>';
+    clearPlotShell(refs.dlLossPlot, lossEmpty);
+  }
+  const repeatedCvLike = stats.evaluation_mode === "repeated_cv" || stats.evaluation_mode === "repeated_cv_incomplete";
+  if (repeatedCvLike && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
+    if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Repeated-CV Repeat Summary";
+    renderTable(refs.dlComparisonShell, stats.repeat_results);
+  } else {
+    if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
+    refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
+  }
+  if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
+    renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
+  } else {
+    refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
+  }
+  resetPlotElement(refs.dlComparisonPlot);
+  refs.dlComparisonPlot.classList.add("hidden");
+  refs.downloadDlComparisonButton.disabled = !(Array.isArray(stats.comparison_table) && stats.comparison_table.length);
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
+  setDlManuscriptDownloadsEnabled(!!(repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table?.length));
+  // Backend may emit either `scientific_summary` or `insight_board` depending on model implementation.
+  const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
+  renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning results.");
+  const epochsTrained = stats.epochs_trained ?? stats.epochs ?? payload.request_config?.epochs;
+  // The early-stopping run's length; epochs_trained is the refit that produced the reported model.
+  const earlyStoppingEpochs = stats.early_stopping_epochs ?? epochsTrained;
+  const dlMetricLabel = stats.evaluation_mode === "repeated_cv"
+    ? "Mean repeated-CV C-index"
+    : (stats.evaluation_mode === "repeated_cv_incomplete"
+      ? "Mean repeated-CV C-index (incomplete)"
+      : (stats.evaluation_mode === "holdout"
+        ? "Holdout C-index"
+        : (stats.evaluation_mode === "holdout_fallback_apparent" ? "Apparent fallback C-index" : "Apparent C-index")));
+  const dlEvalLabel = stats.evaluation_mode === "repeated_cv"
+    ? repeatedCvDesignLabel(stats)
+    : (stats.evaluation_mode === "repeated_cv_incomplete"
+      ? `${repeatedCvDesignLabel(stats)} (incomplete; fallback folds excluded)`
+      : (stats.evaluation_mode === "holdout_fallback_apparent"
+        ? "holdout requested, reported as apparent fallback"
+        : formatValue(stats.evaluation_mode)));
+  const dlSeedSuffix = repeatedCvLike
+    ? (Array.isArray(stats.training_seeds) && stats.training_seeds.length
+      ? `, repeat seeds=${stats.training_seeds.join(", ")}`
+      : "")
+    : (stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "");
+  const dlTrainingStatus = repeatedCvLike
+    ? ""
+    : (stats.stopped_early
+      ? `, stopped early at epoch ${formatValue(earlyStoppingEpochs)}`
+      : (stats.max_epochs_requested != null && Number(earlyStoppingEpochs) >= Number(stats.max_epochs_requested)
+        ? `, trained to max epoch (${formatValue(stats.max_epochs_requested)})`
+        : ""));
+  const dlBestMonitorSuffix = repeatedCvLike
+    ? ""
+    : (stats.best_monitor_epoch != null ? `, best monitor epoch=${formatValue(stats.best_monitor_epoch)}` : "");
+  // Label the banner with the model that was actually trained, not the live dropdown.
+  const trainedModelType = String(payload.request_config?.model_type || modelType);
+  const trainedModelTag = trainedModelType.toUpperCase();
+  refs.dlMetaBanner.textContent = `${trainedModelTag}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlBestMonitorSuffix}${dlTrainingStatus}${dlSeedSuffix}, time=${elapsedSeconds}s`;
+  renderBenchmarkBoard();
+}
+
 async function runDlModel() {
   const base = currentBaseConfig();
   validateDlControls();
@@ -462,100 +566,80 @@ async function runDlModel() {
     if (!requestTokenMatches("dl", requestToken) || state.dataset?.dataset_id !== datasetId) return;
     loading.finish();
     const elapsedSeconds = ((performance.now() - startedAt) / 1000).toFixed(1);
-    state.dl = payload;
-    runtime.resultPreference.dl = "single";
-    setPanelResultMode(refs.dlPanel, "single");
-    const stats = payload.analysis || {};
-
-    if (payload.figures?.importance) {
-      resetPlotElement(refs.dlImportancePlot);
-      await Plotly.newPlot(refs.dlImportancePlot, payload.figures.importance.data, plotLayoutConfig(payload.figures.importance.layout, "dl_importance"), plotConfig("dl_importance"));
-      stabilizePlotShellHeight(refs.dlImportancePlot);
-      setPlotShellState(refs.dlImportancePlot, "plot");
-    } else {
-      const importanceEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
-        ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit single-fit gradient salience.</span></div>'
-        : '<div class="empty-state plot-empty"><span>No feature importance available</span></div>';
-      clearPlotShell(refs.dlImportancePlot, importanceEmpty);
-    }
-    if (payload.figures?.loss) {
-      resetPlotElement(refs.dlLossPlot);
-      await Plotly.newPlot(refs.dlLossPlot, payload.figures.loss.data, plotLayoutConfig(payload.figures.loss.layout, "dl_loss"), plotConfig("dl_loss"));
-      stabilizePlotShellHeight(refs.dlLossPlot);
-      setPlotShellState(refs.dlLossPlot, "plot");
-    } else {
-      const lossEmpty = (stats?.evaluation_mode === "repeated_cv" || stats?.evaluation_mode === "repeated_cv_incomplete")
-        ? '<div class="empty-state plot-empty"><span>Repeated-CV aggregate runs do not emit a single training loss curve.</span></div>'
-        : '<div class="empty-state plot-empty"><span>No loss curve available</span></div>';
-      clearPlotShell(refs.dlLossPlot, lossEmpty);
-    }
-    const repeatedCvLike = stats.evaluation_mode === "repeated_cv" || stats.evaluation_mode === "repeated_cv_incomplete";
-    if (repeatedCvLike && Array.isArray(stats.repeat_results) && stats.repeat_results.length) {
-      if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Repeated-CV Repeat Summary";
-      renderTable(refs.dlComparisonShell, stats.repeat_results);
-    } else {
-      if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
-      refs.dlComparisonShell.innerHTML = '<div class="empty-state">Run "Compare All" to benchmark all deep models on the same feature set.</div>';
-    }
-    if (repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
-    } else {
-      refs.dlManuscriptShell.innerHTML = '<div class="empty-state">Run "Compare All" to populate manuscript-ready deep comparison rows.</div>';
-    }
-    resetPlotElement(refs.dlComparisonPlot);
-    refs.dlComparisonPlot.classList.add("hidden");
-    refs.downloadDlComparisonButton.disabled = !(Array.isArray(stats.comparison_table) && stats.comparison_table.length);
-    if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = true;
-    if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = true;
-    setDlManuscriptDownloadsEnabled(!!(repeatedCvLike && payload.analysis?.manuscript_tables?.model_performance_table?.length));
-    // Backend may emit either `scientific_summary` or `insight_board` depending on model implementation.
-    const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
-    renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning results.");
-    const epochsTrained = stats.epochs_trained ?? stats.epochs ?? payload.request_config?.epochs;
-    // The early-stopping run's length; epochs_trained is the refit that produced the reported model.
-    const earlyStoppingEpochs = stats.early_stopping_epochs ?? epochsTrained;
-    const dlMetricLabel = stats.evaluation_mode === "repeated_cv"
-      ? "Mean repeated-CV C-index"
-      : (stats.evaluation_mode === "repeated_cv_incomplete"
-        ? "Mean repeated-CV C-index (incomplete)"
-        : (stats.evaluation_mode === "holdout"
-          ? "Holdout C-index"
-          : (stats.evaluation_mode === "holdout_fallback_apparent" ? "Apparent fallback C-index" : "Apparent C-index")));
-    const dlEvalLabel = stats.evaluation_mode === "repeated_cv"
-      ? repeatedCvDesignLabel(stats)
-      : (stats.evaluation_mode === "repeated_cv_incomplete"
-        ? `${repeatedCvDesignLabel(stats)} (incomplete; fallback folds excluded)`
-        : (stats.evaluation_mode === "holdout_fallback_apparent"
-          ? "holdout requested, reported as apparent fallback"
-          : formatValue(stats.evaluation_mode)));
-    const dlSeedSuffix = repeatedCvLike
-      ? (Array.isArray(stats.training_seeds) && stats.training_seeds.length
-        ? `, repeat seeds=${stats.training_seeds.join(", ")}`
-        : "")
-      : (stats.training_seed != null ? `, seed=${formatValue(stats.training_seed)}` : "");
-    const dlTrainingStatus = repeatedCvLike
-      ? ""
-      : (stats.stopped_early
-        ? `, stopped early at epoch ${formatValue(earlyStoppingEpochs)}`
-        : (stats.max_epochs_requested != null && Number(earlyStoppingEpochs) >= Number(stats.max_epochs_requested)
-          ? `, trained to max epoch (${formatValue(stats.max_epochs_requested)})`
-          : ""));
-    const dlBestMonitorSuffix = repeatedCvLike
-      ? ""
-      : (stats.best_monitor_epoch != null ? `, best monitor epoch=${formatValue(stats.best_monitor_epoch)}` : "");
-    // Label the banner with the model that was actually trained, not the live dropdown.
-    const trainedModelType = String(payload.request_config?.model_type || modelType);
-    const trainedModelTag = trainedModelType.toUpperCase();
-    refs.dlMetaBanner.textContent = `${trainedModelTag}: ${dlMetricLabel}=${formatValue(stats.c_index)}, eval=${dlEvalLabel}, epochs=${formatValue(epochsTrained)}${dlBestMonitorSuffix}${dlTrainingStatus}${dlSeedSuffix}, time=${elapsedSeconds}s`;
-    renderBenchmarkBoard();
+    await renderDlModelResult(payload, { elapsedSeconds });
     revealCompletedResultIfCurrent("dl", {
-      mode: repeatedCvLike ? "compare" : "single",
+      mode: ["repeated_cv", "repeated_cv_incomplete"].includes(payload.analysis?.evaluation_mode) ? "compare" : "single",
       successMessage: `${modelLabel} model trained`,
       backgroundMessage: `${modelLabel} model finished in the background. Open Predictive Models when you are ready to review it.`,
     });
   } finally {
     releaseRuntimeBanner(runBanner);
   }
+}
+
+async function renderDlComparisonResult(payload) {
+  state.dl = payload;
+  queueSavedWorkspace();
+  runtime.resultPreference.dl = "compare";
+  runtime.compareCache.dl = payload;
+  setPanelResultMode(refs.dlPanel, "compare");
+
+  if (payload.analysis?.comparison_table?.length) {
+    if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
+    renderComparisonTable(
+      refs.dlComparisonShell,
+      payload.analysis,
+      ["model", "c_index", "c_index_std", "c_index_interval", "locked_test_c_index", "locked_test_n", "locked_test_error", "evaluation_mode", "epochs_trained", "n_features", "training_time_ms", "rank"],
+    );
+  } else {
+    refs.dlComparisonShell.innerHTML = '<div class="empty-state">No deep model returned a comparison row.</div>';
+  }
+  if (payload.analysis?.manuscript_tables?.model_performance_table) {
+    renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
+  }
+  if (payload.figures?.comparison?.data?.length) {
+    refs.dlComparisonPlot.classList.remove("hidden");
+    resetPlotElement(refs.dlComparisonPlot);
+    await Plotly.newPlot(refs.dlComparisonPlot, payload.figures.comparison.data, payload.figures.comparison.layout, plotConfig("dl_model_comparison"));
+    markPlotResult(refs.dlComparisonPlot, payload);
+    stabilizePlotShellHeight(refs.dlComparisonPlot);
+  } else {
+    resetPlotElement(refs.dlComparisonPlot);
+    refs.dlComparisonPlot.classList.add("hidden");
+  }
+  clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>Single-model feature importance appears when you train one deep model.</span></div>');
+  clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Single-model training and monitor metric curves appear when you train one deep model.</span></div>');
+  const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
+  renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
+  const dlRows = payload.analysis?.comparison_table || [];
+  // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
+  const rankOne = comparisonRankOneRow(dlRows);
+  const bestRow = rankOne || {};
+  const dlEvalMode = payload.analysis?.evaluation_mode || "unknown";
+  const dlEvalLabel = compareEvaluationLabel(payload.analysis, dlEvalMode);
+  const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Screening top holdout-comparable" : "Screening top model";
+  const dlMetricLabel = dlEvalMode === "mixed_holdout_apparent"
+    ? "Best holdout C-index"
+    : (dlEvalMode === "repeated_cv"
+      ? "Screening mean C-index"
+      : (dlEvalMode === "repeated_cv_incomplete" ? "Screening mean C-index (incomplete)" : "C-index"));
+  const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
+    ? `, rerun seed=${formatValue(bestRow.training_seed)}`
+    : "";
+  const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
+    ? ", rerun a single architecture with Run Analysis while keeping repeated CV selected"
+    : "";
+  const dlLead = dlRows.length && !rankOne
+    ? (dlEvalMode === "repeated_cv" || dlEvalMode === "repeated_cv_incomplete"
+      ? "No model was CV-selected (no complete cross-validation aggregate)"
+      : "No model was ranked")
+    : `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}`;
+  refs.dlMetaBanner.textContent = `${dlLead}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(dlRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
+  refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
+  if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);
+  if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);
+  setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
+  renderBenchmarkBoard();
 }
 
 async function runDlCompareModels({ suppressCompletionToast = false, compareGroupId = null, compareSource = "single_family_compare" } = {}) {
@@ -610,67 +694,7 @@ async function runDlCompareModels({ suppressCompletionToast = false, compareGrou
     if (!requestTokenMatches("dl", requestToken) || state.dataset?.dataset_id !== datasetId) return;
     loading.finish();
     tagComparePayload(payload, compareGroupId || nextCompareRunGroupId("dl-compare"), compareSource);
-    state.dl = payload;
-    runtime.resultPreference.dl = "compare";
-    runtime.compareCache.dl = payload;
-    setPanelResultMode(refs.dlPanel, "compare");
-
-    if (payload.analysis?.comparison_table?.length) {
-      if (refs.dlComparisonTitle) refs.dlComparisonTitle.textContent = "Deep Model Comparison";
-      renderComparisonTable(
-        refs.dlComparisonShell,
-        payload.analysis,
-        ["model", "c_index", "c_index_std", "c_index_interval", "locked_test_c_index", "locked_test_n", "locked_test_error", "evaluation_mode", "epochs_trained", "n_features", "training_time_ms", "rank"],
-      );
-    } else {
-      refs.dlComparisonShell.innerHTML = '<div class="empty-state">No deep model returned a comparison row.</div>';
-    }
-    if (payload.analysis?.manuscript_tables?.model_performance_table) {
-      renderTable(refs.dlManuscriptShell, payload.analysis.manuscript_tables.model_performance_table, null, { rawHeaders: true });
-    }
-    if (payload.figures?.comparison?.data?.length) {
-      refs.dlComparisonPlot.classList.remove("hidden");
-      resetPlotElement(refs.dlComparisonPlot);
-      await Plotly.newPlot(refs.dlComparisonPlot, payload.figures.comparison.data, payload.figures.comparison.layout, plotConfig("dl_model_comparison"));
-      markPlotResult(refs.dlComparisonPlot, payload);
-      stabilizePlotShellHeight(refs.dlComparisonPlot);
-    } else {
-      resetPlotElement(refs.dlComparisonPlot);
-      refs.dlComparisonPlot.classList.add("hidden");
-    }
-    clearPlotShell(refs.dlImportancePlot, '<div class="empty-state plot-empty"><span>Single-model feature importance appears when you train one deep model.</span></div>');
-    clearPlotShell(refs.dlLossPlot, '<div class="empty-state plot-empty"><span>Single-model training and monitor metric curves appear when you train one deep model.</span></div>');
-    const dlSummary = payload.analysis?.scientific_summary || payload.analysis?.insight_board || null;
-    renderInsightBoard(refs.dlInsightBoard, dlSummary, "Deep learning comparison results.");
-    const dlRows = payload.analysis?.comparison_table || [];
-    // The rank-1 row, not the first one: without a complete CV aggregate no model is ranked.
-    const rankOne = comparisonRankOneRow(dlRows);
-    const bestRow = rankOne || {};
-    const dlEvalMode = payload.analysis?.evaluation_mode || "unknown";
-    const dlEvalLabel = compareEvaluationLabel(payload.analysis, dlEvalMode);
-    const dlBestLabel = dlEvalMode === "mixed_holdout_apparent" ? "Screening top holdout-comparable" : "Screening top model";
-    const dlMetricLabel = dlEvalMode === "mixed_holdout_apparent"
-      ? "Best holdout C-index"
-      : (dlEvalMode === "repeated_cv"
-        ? "Screening mean C-index"
-        : (dlEvalMode === "repeated_cv_incomplete" ? "Screening mean C-index (incomplete)" : "C-index"));
-    const rerunSeedSuffix = (bestRow.training_seed != null && dlEvalMode !== "repeated_cv")
-      ? `, rerun seed=${formatValue(bestRow.training_seed)}`
-      : "";
-    const repeatedCvRerunNote = dlEvalMode === "repeated_cv"
-      ? ", rerun a single architecture with Run Analysis while keeping repeated CV selected"
-      : "";
-    const dlLead = dlRows.length && !rankOne
-      ? (dlEvalMode === "repeated_cv" || dlEvalMode === "repeated_cv_incomplete"
-        ? "No model was CV-selected (no complete cross-validation aggregate)"
-        : "No model was ranked")
-      : `${dlBestLabel}=${formatValue(bestRow.model)}, ${dlMetricLabel}=${formatValue(bestRow.c_index)}`;
-    refs.dlMetaBanner.textContent = `${dlLead}, eval=${formatValue(dlEvalLabel)}, models=${formatValue(dlRows.length)}${lockedTestBannerSuffix(payload.analysis, rankOne)}${rerunSeedSuffix}${repeatedCvRerunNote}`;
-    refs.downloadDlComparisonButton.disabled = !(payload.analysis?.comparison_table?.length);
-    if (refs.downloadDlComparisonPngButton) refs.downloadDlComparisonPngButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);
-    if (refs.downloadDlComparisonSvgButton) refs.downloadDlComparisonSvgButton.disabled = !plotShowsResult(refs.dlComparisonPlot, payload);
-    setDlManuscriptDownloadsEnabled(!!(payload.analysis?.manuscript_tables?.model_performance_table?.length));
-    renderBenchmarkBoard();
+    await renderDlComparisonResult(payload);
     if (!suppressCompletionToast) {
       revealCompletedResultIfCurrent("dl", {
         mode: "compare",

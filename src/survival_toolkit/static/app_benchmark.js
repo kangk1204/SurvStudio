@@ -716,6 +716,7 @@
       const key = boardIntervalKey(board);
       const cached = runtime.benchmarkIntervals?.key === key ? runtime.benchmarkIntervals : null;
       if (cached && !(cached.status === "error" && cached.retryable && Date.now() >= cached.retryAt)) return cached;
+      if (runtime.restoringSavedWork) return cached;
       const failures = cached?.status === "error" ? cached.failures : 0;
       runtime.benchmarkIntervals = { key, status: "loading", failures };
       fetchJSON("/api/model-comparison-intervals", { method: "POST", body: JSON.stringify({ predictions: blocks }) })
@@ -723,6 +724,7 @@
           if (runtime.benchmarkIntervals?.key !== key) return;
           runtime.benchmarkIntervals = { key, status: "ready", result };
           requestBoardRender();
+          if (typeof queueSavedWorkspace === "function") queueSavedWorkspace();
         })
         .catch((error) => {
           if (runtime.benchmarkIntervals?.key !== key) return;

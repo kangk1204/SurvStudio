@@ -1016,10 +1016,12 @@ def test_blank_marker_settings_use_the_shared_defaults(tmp_path: Path, example_d
 _MATRIX = "{ matrix_id: 'm1', filename: 'expr.tsv', n_markers: 20, n_matched: 300, n_patients: 360, id_column: 'patient_id' }"
 
 
-def test_a_marker_matrix_is_freed_when_another_dataset_replaces_its_own(tmp_path: Path, example_dataset: dict) -> None:
-    """R15-11: a derived snapshot keeps the attached matrix; another dataset deletes it on the server."""
+@pytest.mark.parametrize("autosave", [False, True])
+def test_a_marker_matrix_is_retained_for_saved_work_or_freed_in_volatile_mode(tmp_path: Path, example_dataset: dict, autosave: bool) -> None:
+    """Durable cohort switching retains the matrix; explicit volatile mode keeps temporary cleanup."""
     result = _run_page(tmp_path, r"""
       await loadDataset(page, fixtures.dataset);
+      page.run(`savedWorkState.enabled = ${fixtures.autosave}; savedWorkState.modeKnown = true;`);
       page.run("state.markerMatrix = """ + _MATRIX + r"""; renderMarkerMatrixState();");
       const columns = [...fixtures.dataset.columns, { name: "age__median_split", kind: "categorical", n_unique: 2, unique_preview: ["Low", "High"], missing: 0, non_missing: 360 }];
       page.fetchHandler = (request) => {
@@ -1033,17 +1035,19 @@ def test_a_marker_matrix_is_freed_when_another_dataset_replaces_its_own(tmp_path
       const afterDerive = { matrix: page.run("state.markerMatrix?.matrix_id || null"), deletes: page.requests.filter((request) => request.method === "DELETE").length };
       await loadDataset(page, { ...fixtures.dataset, dataset_id: "another-cohort" });
       return { afterDerive, matrix: page.run("state.markerMatrix"), deletes: page.requests.filter((request) => request.method === "DELETE").map((request) => request.url) };
-    """, dataset=example_dataset)
+    """, dataset=example_dataset, autosave=autosave)
 
     assert result["afterDerive"] == {"matrix": "m1", "deletes": 0}
     assert result["matrix"] is None
-    assert result["deletes"] == ["/api/marker-matrix/m1"]
+    assert result["deletes"] == ([] if autosave else ["/api/marker-matrix/m1"])
 
 
-def test_a_marker_file_attached_to_a_replaced_dataset_is_deleted(tmp_path: Path, example_dataset: dict) -> None:
-    """R15-11: the attach answer for the old dataset is not used, and its matrix is freed on the server."""
+@pytest.mark.parametrize("autosave", [False, True])
+def test_a_marker_file_attached_to_a_replaced_dataset_respects_save_mode(tmp_path: Path, example_dataset: dict, autosave: bool) -> None:
+    """An obsolete attachment is retained for saved work and cleaned only in explicit volatile mode."""
     result = _run_page(tmp_path, r"""
       await loadDataset(page, fixtures.dataset);
+      page.run(`savedWorkState.enabled = ${fixtures.autosave}; savedWorkState.modeKnown = true;`);
       const hold = deferred();
       page.fetchHandler = (request) => {
         if (request.method === "DELETE") return { status: 200, body: { status: "deleted" } };
@@ -1060,11 +1064,11 @@ def test_a_marker_file_attached_to_a_replaced_dataset_is_deleted(tmp_path: Path,
         deletes: page.requests.filter((request) => request.method === "DELETE").map((request) => request.url),
         toasts: page.toasts(),
       };
-    """, dataset=example_dataset)
+    """, dataset=example_dataset, autosave=autosave)
 
     assert result["matrix"] is None
-    assert result["deletes"] == ["/api/marker-matrix/m2"]
-    assert any("was not attached" in toast for toast in result["toasts"]), result["toasts"]
+    assert result["deletes"] == ([] if autosave else ["/api/marker-matrix/m2"])
+    assert any(("previous cohort" if autosave else "was not attached") in toast for toast in result["toasts"]), result["toasts"]
 
 
 def test_a_validation_upload_cancelled_in_flight_is_still_deleted(tmp_path: Path, example_dataset: dict, marker_payloads: dict) -> None:
@@ -1268,7 +1272,7 @@ def test_the_upload_button_stays_busy_until_the_last_of_overlapping_uploads_ends
       page.run("refs.datasetFile.files = [{ name: 'second.csv' }]");
       page.change("#datasetFile");
       await page.settle(3);
-      const firstAborted = page.requests[0].signal.aborted;
+      const firstAborted = page.requests.find((request) => request.url.endsWith("/api/upload")).signal.aborted;
       const whileSecond = button();
       uploads[1].resolve({ status: 200, body: fixtures.dataset });
       await page.settle();

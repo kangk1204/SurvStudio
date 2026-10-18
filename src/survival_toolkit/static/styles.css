@@ -3465,3 +3465,16 @@ tbody tr:hover td {
 .predictor-pattern-card .plot-shell { width: 100%; min-width: 0; overflow: hidden; }
 #patternStatus[data-stale="true"] { color: #984d1a; }
 @media (max-width: 700px) { .pattern-input-grid { grid-template-columns: 1fr; } }
+
+/* Durable work stays on the analysis server; the header gives a truthful save state. */
+.autosave-status { color: var(--muted, #66758c); font-size: .78rem; max-width: 15rem; }
+.autosave-status[data-tone="saved"] { color: #23778a; }
+.autosave-status[data-tone="error"] { color: #ad3d30; }
+.saved-work-panel { margin: 1rem auto; max-width: 1120px; padding: 1.25rem; background: #fff; border: 1px solid #dce2e7; border-radius: 1rem; }
+.saved-work-panel .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.saved-work-panel h2 { margin: 0; }
+.saved-work-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .75rem; padding: .85rem 0; border-top: 1px solid #e6e9ed; }
+.saved-work-item > div { min-width: 0; flex: 1 1 14rem; }
+.saved-work-item strong, .saved-work-item span { display: block; overflow-wrap: anywhere; }
+.saved-work-item span { color: #66758c; font-size: .85rem; margin-top: .25rem; }
+@media (max-width: 640px) { .autosave-status { max-width: 9rem; font-size: .7rem; } .saved-work-panel { margin: .75rem; } }

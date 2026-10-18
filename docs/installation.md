@@ -84,7 +84,7 @@ For browser tests, add `python -m pip install -e ".[dev,e2e]"` and
 
 ```bash
 docker build -t survstudio https://github.com/kangk1204/SurvStudio.git
-docker run --rm -p 127.0.0.1:8000:8000 survstudio
+docker run --rm -p 127.0.0.1:8000:8000 -v survstudio-data:/home/survstudio/saved-work survstudio
 ```
 
 Open <http://127.0.0.1:8000>. The default image includes file formats and ML; build with
@@ -97,10 +97,12 @@ Open <http://127.0.0.1:8000>. The default image includes file formats and ML; bu
 | `uv` is not found | Close the terminal and open it again. |
 | `survstudio` is not found | Run `uv tool update-shell`, then open a new terminal. |
 | Port 8000 is busy | Run `survstudio serve --port 8001` and open <http://127.0.0.1:8001>. |
+| Saved work is already open by another server | Open the existing server. To run a separate workspace, choose a different `--state-dir`. |
 | The browser page stops responding | Keep the terminal running; restart with `survstudio` if it was closed. |
 | A model package is missing | Reinstall with `[all]`. |
 | DL takes too long | Start with one model, holdout evaluation and a small feature set. |
 | An uploaded file is refused | Check the message, column names, numeric follow-up time and event coding. |
 
 The local app has no login. Keep the default `127.0.0.1` address for use on your own computer.
-Uploaded datasets are held in memory and are discarded when the app stops.
+Uploads and completed results are saved in a private local directory. Use **Saved work** to reopen them.
+Keep the named Docker volume when replacing a container. See [saved work and backups](saved-work.md).

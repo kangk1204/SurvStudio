@@ -71,6 +71,42 @@ class DatasetStore:
         self._shared_metadata_keys = frozenset(str(key) for key in shared_metadata_keys)
         self._clock: Callable[[], float] = time.monotonic
         self._last_used: dict[str, float] = {}
+        self._persistence: Any | None = None
+
+    def bind_persistence(self, backend: Any) -> None:
+        """Save current residents before enabling durable, read-through storage."""
+        with self._lock:
+            for stored in self._datasets.values():
+                backend.save_dataset(stored, import_existing=True)
+            self._persistence = backend
+
+    def unbind_persistence(self) -> None:
+        with self._lock:
+            self._persistence = None
+
+    def list_saved_datasets(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._persistence is not None:
+                return self._persistence.list_datasets()
+            return [
+                {"dataset_id": value.dataset_id, "filename": value.filename,
+                 "source": value.source, "created_at": value.created_at.isoformat(),
+                 "last_accessed": value.last_accessed.isoformat(),
+                 "dataset_hash": value.metadata.get("dataset_hash"),
+                 "rows": len(value.dataframe), "columns": len(value.dataframe.columns)}
+                for value in reversed(self._datasets.values())
+            ]
+
+    def _restore_locked(self, dataset_id: str) -> tuple[StoredDataset | None, list[str]]:
+        stored = self._datasets.get(dataset_id)
+        evicted: list[str] = []
+        if stored is None and self._persistence is not None:
+            stored = self._persistence.load_dataset(dataset_id)
+            if stored is not None:
+                evicted = self._evict_lru()
+                self._datasets[dataset_id] = stored
+                self._last_used[dataset_id] = self._clock()
+        return stored, evicted
 
     def _copy_metadata(self, metadata: dict[str, Any]) -> dict[str, Any]:
         if not self._shared_metadata_keys:
@@ -139,7 +175,7 @@ class DatasetStore:
 
     def contains(self, dataset_id: str) -> bool:
         with self._lock:
-            return dataset_id in self._datasets
+            return dataset_id in self._datasets or (self._persistence is not None and self._persistence.has_dataset(dataset_id))
 
     @staticmethod
     def _copy_dataframe(dataframe: pd.DataFrame, *, copy_dataframe: bool) -> pd.DataFrame:
@@ -204,8 +240,6 @@ class DatasetStore:
         stored_metadata = self._copy_metadata(metadata or {})
         stored_metadata["dataset_hash"] = dataset_hash
         with self._lock:
-            evicted = self._evict_expired()
-            evicted.extend(self._evict_lru())
             dataset_id = uuid4().hex
             created_at = datetime.now(timezone.utc)
             stored = StoredDataset(
@@ -217,6 +251,10 @@ class DatasetStore:
                 last_accessed=created_at,
                 metadata=stored_metadata,
             )
+            if self._persistence is not None:
+                self._persistence.save_dataset(stored)
+            evicted = self._evict_expired()
+            evicted.extend(self._evict_lru())
             self._datasets[dataset_id] = stored
             self._last_used[dataset_id] = self._clock()
             snapshot = replace(stored)
@@ -243,7 +281,8 @@ class DatasetStore:
         """
         with self._lock:
             evicted = self._evict_expired()
-            stored = self._datasets.get(dataset_id)
+            stored, restored_evictions = self._restore_locked(dataset_id)
+            evicted.extend(restored_evictions)
             snapshot = None
             if stored is not None:
                 self._touch(dataset_id)
@@ -255,10 +294,12 @@ class DatasetStore:
 
     def delete(self, dataset_id: str) -> None:
         with self._lock:
-            try:
+            if dataset_id not in self._datasets and (self._persistence is None or not self._persistence.has_dataset(dataset_id)):
+                raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}")
+            if self._persistence is not None:
+                self._persistence.delete_dataset(dataset_id)
+            if dataset_id in self._datasets:
                 self._forget(dataset_id)
-            except KeyError as exc:
-                raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}") from exc
         self._notify_evicted([dataset_id])
 
     def update_dataframe(self, dataset_id: str, dataframe: pd.DataFrame, *, copy_dataframe: bool = True) -> StoredDataset:
@@ -266,13 +307,18 @@ class DatasetStore:
         dataset_hash = self._dataframe_hash(new_dataframe)
         with self._lock:
             evicted = self._evict_expired()
-            stored = self._datasets.get(dataset_id)
+            stored, restored_evictions = self._restore_locked(dataset_id)
+            evicted.extend(restored_evictions)
             snapshot = None
             if stored is not None:
-                stored.dataframe = new_dataframe
-                stored.metadata = {**stored.metadata, "dataset_hash": dataset_hash}
+                updated = replace(stored, dataframe=new_dataframe,
+                                  metadata={**stored.metadata, "dataset_hash": dataset_hash},
+                                  last_accessed=datetime.now(timezone.utc))
+                if self._persistence is not None:
+                    self._persistence.save_dataset(updated)
+                self._datasets[dataset_id] = updated
                 self._touch(dataset_id)
-                snapshot = replace(stored)
+                snapshot = replace(updated)
         self._notify_evicted(evicted)
         if snapshot is None:
             raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}")
@@ -284,15 +330,19 @@ class DatasetStore:
         new_metadata = self._copy_metadata(metadata)
         with self._lock:
             evicted = self._evict_expired()
-            stored = self._datasets.get(dataset_id)
+            stored, restored_evictions = self._restore_locked(dataset_id)
+            evicted.extend(restored_evictions)
             snapshot = None
             if stored is not None:
-                stored.metadata = {
+                updated = replace(stored, metadata={
                     **new_metadata,
                     "dataset_hash": stored.metadata.get("dataset_hash") or self._dataframe_hash(stored.dataframe),
-                }
+                }, last_accessed=datetime.now(timezone.utc))
+                if self._persistence is not None:
+                    self._persistence.save_dataset(updated)
+                self._datasets[dataset_id] = updated
                 self._touch(dataset_id)
-                snapshot = replace(stored)
+                snapshot = replace(updated)
         self._notify_evicted(evicted)
         if snapshot is None:
             raise DatasetNotFoundError(f"Unknown dataset id: {dataset_id}")

@@ -92,9 +92,9 @@ async function attachMarkerMatrix() {
   form.append("orientation", refs.markerMatrixOrientation?.value || "auto");
   const payload = await fetchJSON("/api/marker-matrix", { method: "POST", body: form });
   if (state.dataset?.dataset_id !== datasetId) {
-    // The matrix was matched to the patients of a dataset the workspace no longer shows: free it again.
-    deleteMarkerMatrixOnServer(payload?.matrix_id);
-    showToast("The dataset changed while the marker file was being attached, so it was not attached. Attach it again.", "warning", 5200);
+    // Durable uploads remain attached to their original saved cohort even if the user moved on.
+    if (savedWorkState.modeKnown && !savedWorkState.enabled) deleteMarkerMatrixOnServer(payload?.matrix_id);
+    showToast(savedWorkState.enabled ? "The marker file was saved with the previous cohort. Open it from Saved work." : "The dataset changed while the marker file was being attached, so it was not attached here. Check its saved cohort before attaching again.", "warning", 5200);
     return;
   }
   state.markerMatrix = payload;
@@ -102,6 +102,8 @@ async function attachMarkerMatrix() {
   renderMarkerMatrixState();
   renderMarkerSelectionLine();
   scheduleResultCurrencySync();
+  queueSavedWorkspace();
+  await saveCurrentWorkspace();
   showToast(`Attached ${formatCount(payload.n_markers)} markers; ${formatCount(payload.n_matched)} of ${formatCount(payload.n_patients)} patients matched.`, "success", 4000);
 }
 
@@ -110,13 +112,15 @@ function deleteMarkerMatrixOnServer(matrixId) {
   if (matrixId) fetch(apiUrl(`/api/marker-matrix/${encodeURIComponent(matrixId)}`), { method: "DELETE" }).catch(() => {});
 }
 
-function removeMarkerMatrix() {
+async function removeMarkerMatrix() {
   const matrixId = state.markerMatrix?.matrix_id;
+  if (matrixId) await fetchJSON(`/api/marker-matrix/${encodeURIComponent(matrixId)}?dataset_id=${encodeURIComponent(state.dataset.dataset_id)}`, { method: "DELETE" });
   state.markerMatrix = null;
-  deleteMarkerMatrixOnServer(matrixId);
   renderMarkerMatrixState();
   renderMarkerSelectionLine();
   scheduleResultCurrencySync();
+  queueSavedWorkspace();
+  await saveCurrentWorkspace();
 }
 
 function markerCandidateColumns() {
@@ -740,7 +744,7 @@ function currentMarkerValidationSignature() {
     if (!recipe) return null;
     const file = refs.markerValidationFile?.files?.[0];
     return JSON.stringify({ dataset_id: state.dataset?.dataset_id, recipe_hash: recipe.recipe_hash,
-      file: file ? [file.name, file.size ?? null, file.lastModified ?? null] : null,
+      file: file ? [file.name, file.size ?? null, file.lastModified ?? null] : (runtime.savedValidationFile || null),
       ...markerValidationRequestFields() });
   } catch { return null; }
 }
@@ -793,11 +797,12 @@ async function runMarkerValidation() {
     const payload = await fetchJSON("/api/marker-validation", {
       signal: requestSignal("markerValidation"),
       method: "POST",
-      body: JSON.stringify({ dataset_id: external.dataset_id, recipe, ...fields }),
+      body: JSON.stringify({ dataset_id: external.dataset_id, development_dataset_id: sourceDatasetId, recipe, ...fields }),
     });
     if (!requestTokenMatches("markerValidation", requestToken) || state.dataset?.dataset_id !== sourceDatasetId) return;
     // Shown only under the evaluation whose locked model it validated.
     if (state.markers?.analysis?.locked_recipe?.recipe_hash !== recipeHash || currentMarkerValidationSignature() !== inputSignature) return;
+    runtime.savedValidationFile = [file.name, file.size ?? null, file.lastModified ?? null];
     const completed = { ...payload, external_filename: file.name, input_signature: inputSignature };
     state.markerValidation = completed;
     const isCurrent = () => requestTokenMatches("markerValidation", requestToken)
@@ -805,13 +810,14 @@ async function runMarkerValidation() {
       && currentMarkerValidationSignature() === inputSignature;
     if (!await renderMarkerValidation(completed, { isCurrent }) || !isCurrent()) return;
     syncDownloadButtonAvailability();
+    await saveCurrentWorkspace();
     showToast(`Locked model applied to ${file.name}.`, "success", 3200);
   } finally {
     if (runtime.markerValidationSignature === inputSignature) runtime.markerValidationSignature = null;
     releaseRuntimeBanner(runBanner);
-    // The external cohort was stored only for this validation; free it so it cannot crowd out the
-    // development dataset in the server's store.
-    if (externalDatasetId) {
+    // Durable sessions retain the external upload as provenance. Volatile sessions retain the
+    // previous temporary-upload cleanup, since they have no saved-work archive.
+    if (savedWorkState.modeKnown && !savedWorkState.enabled && externalDatasetId) {
       fetch(apiUrl(`/api/dataset/${encodeURIComponent(externalDatasetId)}`), { method: "DELETE" }).catch(() => {});
     }
   }
@@ -1022,7 +1028,7 @@ function wireMarkerControls() {
     // withLoading re-enables its button; it stays off while a matrix is attached.
     renderMarkerMatrixState();
   });
-  refs.removeMarkerMatrixButton?.addEventListener("click", removeMarkerMatrix);
+  refs.removeMarkerMatrixButton?.addEventListener("click", () => removeMarkerMatrix().catch(showError));
   markerResultJsonButton?.addEventListener("click", downloadMarkerResult);
   markerValidationJsonButton?.addEventListener("click", downloadMarkerValidation);
   refs.downloadMarkersCsvButton?.addEventListener("click", downloadMarkerTable);

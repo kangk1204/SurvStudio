@@ -116,7 +116,7 @@ To run SurvStudio in a container, build the image from the repository's address 
 
 ```bash
 docker build -t survstudio https://github.com/kangk1204/SurvStudio.git
-docker run --rm -p 127.0.0.1:8000:8000 survstudio
+docker run --rm -p 127.0.0.1:8000:8000 -v survstudio-data:/home/survstudio/saved-work survstudio
 ```
 
 Then open <http://localhost:8000>. From a clone of the repository, `docker build -t survstudio .` does the same.
@@ -125,7 +125,7 @@ Then open <http://localhost:8000>. From a clone of the repository, `docker build
   has no login, so `-p 8000:8000` would expose it to your network.
 - The image includes the table formats and the classical ML models. Build with `--build-arg EXTRAS=all` to add
   deep learning (PyTorch, about 1 GB more).
-- Uploaded data stay in the container's memory and are gone when it stops.
+- Keep the named volume when replacing a container; it stores uploaded tables and completed results.
 - The in-app `Shutdown` button does not work through Docker's port forwarding; stop the container with
   `docker stop` or Ctrl+C.
 
@@ -237,9 +237,10 @@ Security and runtime behaviour:
   data, run analyses and open datasets whose IDs they know.
 - The in-app `Shutdown` works only when the page was opened through a loopback address; through a LAN name or a
   reverse proxy it returns `403`.
-- Uploaded datasets live in memory only: at most 10 at a time (the least recently used is dropped first), and each
-  expires after 1 hour without use. A file is written to a temporary file while it is read and deleted right after.
-  `DELETE /api/dataset/{dataset_id}` frees a dataset at once, together with any models cached for it.
+- Uploaded datasets are saved privately on disk. The memory cache holds at most 10 unleased datasets and
+  releases idle entries after 1 hour; later access restores the same ID from disk. **Saved work** reopens
+  completed results without refitting. `DELETE /api/dataset/{dataset_id}` explicitly removes its saved table,
+  results and associated fitted artifacts. See [storage, opt-out and backups](saved-work.md).
 - Heavy jobs (model training and comparison, marker evaluation, signature search, optimal cutpoints,
   time-dependent importance, counterfactual and partial-dependence runs) run at most 2 at a time; later ones wait
   for a free slot. Set `SURVSTUDIO_MAX_HEAVY_JOBS` to change the limit.

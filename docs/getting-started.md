@@ -83,8 +83,9 @@ Small differences on one split do not establish that a model is better. Versions
 ### 5. Save your work
 
 Use **Save results** or the panel's **Save files** menu to download the figure and result table.
-Keep the input file and settings with them. Downloads are not a saved browser session:
-uploaded data leave memory when the local server stops.
+Uploads and completed results also save automatically on the server. Use **Saved work** to reopen them
+after a reload or restart, without rerunning the analysis. Keep an independent copy of your input and
+exported results. [Saved work and backups](saved-work.md)
 
 ## Prepare your own file
 
