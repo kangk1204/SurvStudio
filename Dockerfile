@@ -17,7 +17,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/survstudio
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY licenses ./licenses
 COPY src ./src
 
 ARG EXTRAS=formats,ml

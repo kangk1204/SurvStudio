@@ -135,4 +135,4 @@ These are sample outputs, not evidence that a treatment causes a difference or t
 ## More help
 
 [Beginner walkthrough](docs/getting-started.md) · [Installation](docs/installation.md) · [User guide](docs/user-guide.md) · [Full reference](docs/reference.md) ·
-[Numerical checks](docs/validation/numerical_agreement.md) · [Changes](RELEASE_NOTES.md) · [MIT license](LICENSE)
+[Numerical checks](docs/validation/numerical_agreement.md) · [Changes](RELEASE_NOTES.md) · [MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md)

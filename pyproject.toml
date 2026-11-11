@@ -9,7 +9,7 @@ description = "Local survival analysis workbench: Kaplan-Meier, Cox, prognostic 
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/*.txt"]
 authors = [{ name = "Keunsoo Kang" }]
 keywords = [
   "survival analysis",
